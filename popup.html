@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ReelCoach</title>
+<style>
+  :root {
+    --marley: #26252B; --floor: #3A3940; --line: #4A4950;
+    --tape: #FFC400; --cyan: #38BDF8; --chalk: #F4F4F5; --muted: #A1A1AA;
+  }
+  * { box-sizing: border-box; }
+  body {
+    width: 300px; margin: 0; padding: 16px 16px 14px; background: var(--marley); color: var(--chalk);
+    font: 13px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  header { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  header img { width: 32px; height: 32px; border-radius: 8px; }
+  h1 {
+    margin: 0; font: 700 22px/1 "Bahnschrift SemiCondensed", "Bahnschrift", "Arial Narrow", sans-serif;
+    letter-spacing: .01em;
+  }
+  .lead { margin: 6px 0 12px; color: var(--muted); }
+  h2 { margin: 14px 0 6px; font: 700 15px/1 "Bahnschrift SemiCondensed", "Bahnschrift", "Arial Narrow", sans-serif; }
+  label { display: flex; justify-content: space-between; align-items: center; margin: 6px 0; }
+  input {
+    width: 68px; background: var(--floor); color: var(--chalk); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 7px; font: inherit; text-align: right;
+  }
+  input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  td { padding: 3px 0; vertical-align: top; }
+  td:first-child { width: 86px; }
+  kbd {
+    display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4px; text-align: center;
+    background: var(--floor); border-bottom: 2px solid var(--line); font: 600 11px/1.4 "Segoe UI", system-ui, sans-serif;
+  }
+  .power { margin: 10px 0 4px; padding: 10px 12px; border-radius: 8px; background: var(--floor); cursor: pointer; }
+  .power .sub { color: var(--muted); font-size: 11.5px; }
+  .power input {
+    appearance: none; -webkit-appearance: none; flex: none; width: 42px; height: 24px; margin: 0; padding: 0;
+    border: 0; border-radius: 12px; background: var(--line); position: relative; cursor: pointer; transition: background-color .15s;
+  }
+  .power input::after {
+    content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--chalk); transition: transform .15s ease-out;
+  }
+  .power input:checked { background: var(--tape); }
+  .power input:checked::after { transform: translateX(18px); background: #1d1c21; }
+  .power input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+  body.off .lead, body.off h2, body.off label:not(.power), body.off table { opacity: .45; }
+  @media (prefers-reduced-motion: reduce) { .power input, .power input::after { transition: none; } }
+  footer { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11.5px; }
+  footer p { margin: 0 0 4px; }
+</style>
+</head>
+<body>
+  <header>
+    <img src="icons/icon48.png" alt="">
+    <h1>ReelCoach</h1>
+  </header>
+  <label class="power" for="enabled">
+    <span><strong id="powerLabel">ReelCoach is on</strong><br><span class="sub" id="powerSub">Turn off to hide the controls everywhere</span></span>
+    <input id="enabled" type="checkbox" role="switch" checked>
+  </label>
+  <p class="lead">Hover any video on Instagram, Facebook or TikTok to get the controls.</p>
+
+  <h2>Settings</h2>
+  <label for="skip">Skip back / forward (seconds) <input id="skip" type="number" min="0.5" max="60" step="0.5"></label>
+  <label for="fineSkip">Shift + skip (seconds) <input id="fineSkip" type="number" min="0.1" max="30" step="0.1"></label>
+  <label for="autoHide">Hide controls after (seconds) <input id="autoHide" type="number" min="0.5" max="30" step="0.5"></label>
+
+  <h2>Shortcuts</h2>
+  <table>
+    <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Skip back / forward</td></tr>
+    <tr><td><kbd>,</kbd> <kbd>.</kbd></td><td>Previous / next frame</td></tr>
+    <tr><td><kbd>K</kbd></td><td>Play / pause</td></tr>
+    <tr><td><kbd>A</kbd> <kbd>B</kbd></td><td>Set loop start / end</td></tr>
+    <tr><td><kbd>L</kbd> <kbd>X</kbd></td><td>Loop on/off / clear loop</td></tr>
+    <tr><td><kbd>S</kbd> <kbd>D</kbd> <kbd>R</kbd></td><td>Slower / faster / normal speed</td></tr>
+    <tr><td><kbd>M</kbd></td><td>Mirror the video</td></tr>
+  </table>
+
+  <footer>
+    <p>No tracking, no accounts, no servers. ReelCoach runs 100% locally in your browser.</p>
+    <p>Not affiliated with Instagram, Meta or TikTok.</p>
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>

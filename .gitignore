@@ -1,0 +1,17 @@
+# Local / personal files — never publish
+claude_start.bat
+demo/
+.claude/
+
+# Packaged builds and signing keys
+*.zip
+*.crx
+*.pem
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+node_modules/
