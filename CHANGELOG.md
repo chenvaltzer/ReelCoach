@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.5.0 — November 2026
+
+- **Never covers the site's own buttons**: the control bar now checks for the site's own controls in its path (like Instagram's volume/mute button in the bottom corner) and lifts just above them, so they stay visible and clickable. Checked on Instagram reels and posts, Facebook reels and TikTok.
+- The bar holds its position while you use it, so it never shifts under the mouse mid-drag.
+
 ## 1.4.0 — November 2026
 
 Chrome Web Store preparation & full platform policy compliance.

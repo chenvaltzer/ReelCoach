@@ -2,8 +2,9 @@
   "manifest_version": 3,
   "name": "ReelCoach",
   "short_name": "ReelCoach",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Rewind, scrub, loop, slow down and mirror videos on Instagram, Facebook and TikTok. Built for dancers and learners.",
+  "homepage_url": "https://github.com/chenvaltzer/ReelCoach",
   "minimum_chrome_version": "111",
   "permissions": ["storage"],
   "background": {
