@@ -61,7 +61,7 @@ Reels and short videos make that hard: no rewind, no timeline to grab, no way to
   </tr>
 </table>
 
-The controls appear when you hover a video and fade away when you stop moving the mouse, so they never get in the way while you dance.
+The controls appear as a floating bottom pill when you hover a video — leaving both bottom corners open for the site's own volume/mute and tag buttons — and fade away when you stop moving the mouse, so they never get in the way while you dance.
 
 ## Install
 

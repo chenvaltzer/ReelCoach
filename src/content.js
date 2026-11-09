@@ -351,12 +351,13 @@
       transform: translate(-50%, -4px); padding: 7px 11px; border-radius: 8px; background: rgba(0,0,0,.82);
       font-weight: 600; white-space: nowrap; opacity: 0; transition: opacity .15s, transform .15s; pointer-events: none; }
     .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .wrap.compact .bar { left: 44px; right: 44px; padding: 8px 8px 6px; }
     .wrap.compact .opt { display: none; }
     .wrap.compact .time .d { display: none; }
-    .wrap.compact button { min-width: 26px; padding: 0 4px; }
-    .wrap.compact .row { gap: 1px; }
+    .wrap.compact button { min-width: 24px; padding: 0 3px; }
+    .wrap.compact .row { gap: 1px; flex-wrap: nowrap; }
     .wrap.compact .time { padding: 0 3px; }
-    .wrap.compact .spd { min-width: 36px; }
+    .wrap.compact .spd { min-width: 32px; }
     @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
   `;
 
