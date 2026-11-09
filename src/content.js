@@ -300,8 +300,9 @@
       font: 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #fff; }
     .wrap.show { opacity: 1; }
     .wrap.show .bar { pointer-events: auto; }
-    .bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 26px 10px 8px; transition: bottom .16s ease-out;
-      background: linear-gradient(to top, rgba(10,10,10,.95) 0, rgba(10,10,10,.92) calc(100% - 30px), rgba(10,10,10,0) 100%); }
+    .bar { position: absolute; left: 48px; right: 48px; bottom: 8px; padding: 10px 10px 8px; border-radius: 12px;
+      background: rgba(12, 12, 16, .9); backdrop-filter: blur(8px); border: 1px solid rgba(255, 255, 255, .12);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
     .tl { position: relative; height: 20px; cursor: pointer; touch-action: none; }
     .track { position: absolute; left: 0; right: 0; top: 8px; height: 4px; border-radius: 3px;
       background: rgba(255,255,255,.22); transition: top .1s, height .1s; }
@@ -451,39 +452,6 @@
   let dragging = null; // 'seek' | 'A' | 'B'
 
   function poke(ms = 1500) { pokeUntil = Math.max(pokeUntil, performance.now() + ms); }
-
-  // ---------------- don't cover the site's own controls ----------------
-  // Sample the strip where our bar sits; if the site has its own button there (mute, volume,
-  // captions…), lift our bar just above it so that button stays visible and clickable.
-  let dodge = 0, dodgeFor = null, dodgeAt = 0;
-  const BAR_STRIP = 92; // px from the bottom of the video that our bar occupies
-  function nativeControlAt(x, y, v, vArea) {
-    for (const el of document.elementsFromPoint(x, y)) {
-      if (el === host || el === v || el.contains(v)) continue;
-      const ctl = el.closest('button, [role="button"], [aria-label], a[href], input, select');
-      if (!ctl || ctl === host || ctl.contains(v)) continue;
-      const r = ctl.getBoundingClientRect();
-      if (r.width < 8 || r.height < 8 || r.width * r.height > vArea * 0.2) continue; // skip big wrappers
-      return r;
-    }
-    return null;
-  }
-  function liftFor(v, left, right, bottom, h) {
-    if (h < 160) return 0;
-    const vr = v.getBoundingClientRect();
-    const vArea = vr.width * vr.height;
-    const stripTop = bottom - Math.min(BAR_STRIP, h * 0.4);
-    let minTop = Infinity;
-    for (let y = bottom - 6; y > stripTop; y -= 18) {
-      for (let x = left + 8; x < right - 4; x += 28) {
-        const r = nativeControlAt(x, y, v, vArea);
-        if (r && r.top < minTop) minTop = r.top;
-      }
-    }
-    if (!isFinite(minTop)) return 0;
-    const lift = Math.round(bottom - minTop + 6);
-    return lift > 0 && lift < h * 0.45 ? lift : 0;
-  }
 
   function rectOf(v) {
     const r = v.getBoundingClientRect();
@@ -723,22 +691,8 @@
     const w = Math.max(0, right - left), h = Math.max(0, bottom - top);
     const st = ui.wrap.style;
     st.left = `${left}px`; st.top = `${top}px`; st.width = `${w}px`; st.height = `${h}px`;
-    ui.wrap.classList.toggle('compact', w < 460);
-    if (!show) {
-      // Controls hidden: forget the lift so the next appearance measures afresh.
-      if (dodge && !ui.wrap.matches(':hover')) { dodge = 0; dodgeFor = null; ui.bar.style.bottom = '0px'; }
-      return;
-    }
-
-    // Step aside for the site's own buttons (e.g. Instagram's volume button in the bottom corner).
-    // The lift only ever grows while the controls are showing: sites often hide their buttons when
-    // the mouse moves onto our bar, and dropping back down would make the bar jump under the cursor.
-    if (v !== dodgeFor) { dodgeFor = v; dodgeAt = 0; dodge = 0; ui.bar.style.bottom = '0px'; }
-    if (!dragging && now - dodgeAt > 350) {
-      dodgeAt = now;
-      const lift = liftFor(v, left, right, bottom, h);
-      if (lift > dodge) { dodge = lift; ui.bar.style.bottom = `${lift}px`; }
-    }
+    ui.wrap.classList.toggle('compact', w < 520);
+    if (!show) return;
 
     const d = dur(v), t = intendedTime(v);
     const pct = (x) => `${d ? clamp(x / d, 0, 1) * 100 : 0}%`;

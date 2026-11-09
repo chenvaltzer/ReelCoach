@@ -1,9 +1,9 @@
 # Changelog
 
-## 1.5.0 — November 2026
+## 1.5.1 — November 2026
 
-- **Never covers the site's own buttons**: the control bar now checks for the site's own controls in its path (like Instagram's volume/mute button in the bottom corner) and lifts just above them, so they stay visible and clickable. Checked on Instagram reels and posts, Facebook reels and TikTok.
-- The bar holds its position while you use it, so it never shifts under the mouse mid-drag.
+- **Bottom-pinned floating pill overlay**: the control bar stays pinned at the bottom of the video (`bottom: 8px`) with 48px corner clearance on both the left and right edges (`left: 48px; right: 48px`), keeping native corner buttons (such as Instagram's volume/mute button and tag button) completely uncovered without ever shifting the bar upward.
+- Added official repository `homepage_url` in `manifest.json`.
 
 ## 1.4.0 — November 2026
 
