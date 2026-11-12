@@ -1,8 +1,10 @@
-// Settings popup. Values are stored with chrome.storage.sync (skip, fineSkip, autoHide, mirror, enabled;
+// Settings popup. Values are stored with chrome.storage.sync (skip, fineSkip, autoHide, mirror, dotMode, enabled;
 // nothing personal). Each value is clamped to a safe range before saving.
 
 // On/off switch for the whole extension.
 const power = document.getElementById('enabled');
+const dotSwitch = document.getElementById('dotMode');
+
 function showPower(on) {
   power.checked = on;
   document.getElementById('powerLabel').textContent = on ? 'ReelCoach is on' : 'ReelCoach is off';
@@ -13,7 +15,18 @@ power.addEventListener('change', () => {
   showPower(power.checked);
   chrome.storage.sync.set({ enabled: power.checked });
 });
-chrome.storage.sync.get({ enabled: true }, ({ enabled }) => showPower(enabled !== false));
+dotSwitch.addEventListener('change', () => {
+  chrome.storage.sync.set({ dotMode: dotSwitch.checked });
+});
+chrome.storage.sync.get({ enabled: true, dotMode: false }, ({ enabled, dotMode }) => {
+  showPower(enabled !== false);
+  dotSwitch.checked = dotMode === true;
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'sync') return;
+  if (changes.enabled) showPower(changes.enabled.newValue !== false);
+  if (changes.dotMode) dotSwitch.checked = changes.dotMode.newValue === true;
+});
 
 const DEFAULTS = { skip: 5, fineSkip: 1, autoHide: 2.5 };
 const LIMITS = { skip: [0.5, 60], fineSkip: [0.1, 30], autoHide: [0.5, 30] };

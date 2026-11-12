@@ -16,3 +16,8 @@ desktop.ini
 .vscode/
 .idea/
 node_modules/
+
+# Test scratch artifacts
+tests/.tmp*/
+tests/profile-*/
+tests/*.png

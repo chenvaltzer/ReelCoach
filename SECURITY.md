@@ -19,7 +19,7 @@ Only the latest release receives security fixes.
 ReelCoach treats everything on the sites it runs on (Instagram, Facebook, TikTok), including scripts running on the page, as untrusted:
 
 - **Real input only.** All controls ignore events that page scripts synthesize (`event.isTrusted` must be true).
-- **Isolated world execution.** The extension runs entirely in an isolated content script world with Shadow DOM encapsulation (`#igvc-host`), preventing host page scripts from reading or manipulating extension state.
+- **Isolated state & one-way seek bridge.** All UI, settings, and input handling run in an isolated content script world with Shadow DOM encapsulation (`#igvc-host`), preventing host page scripts from reading or manipulating extension state. A minimal 20-line MAIN-world helper (`src/page-seek.js`) only forwards numeric `video.currentTime` seeks so the host player can clear stale `MediaSource` buffer ranges, and never passes page data back to the extension.
 - **Zero network requests.** The extension makes no network requests, executes no downloads, and contacts no external APIs.
 - **No dynamic code.** No `eval`, no remote scripts, no third-party dependencies, and zero HTML injection with dynamic data. Dynamic values are only ever rendered using `textContent`.
 - **Minimal permissions (Least Privilege).** Exactly one permission (`storage`) to persist user UI settings. No `downloads`, no webRequest, no cookies, no host permissions, no external messaging, and no web-accessible resources.

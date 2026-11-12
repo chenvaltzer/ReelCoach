@@ -22,8 +22,8 @@ Please don't paste links to private accounts or other people's personal informat
    - zero external network requests and no remote code;
    - no `innerHTML` with dynamic data;
    - no new permissions, sites or third-party code without a clear reason in the pull request.
-4. Test on a direct reel link and in the scrolling Reels feed.
-5. Open a pull request that describes the change and how you tested it.
+4. Run the full automated E2E and regression suite (`node tests/run-all.js`) and ensure 100% of checks pass before opening a pull request or cutting a release. Every bug fix should include a corresponding check in `tests/`.
+5. Open a pull request that describes the change and includes the `node tests/run-all.js` summary.
 
 ## Ground rules
 

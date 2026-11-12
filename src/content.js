@@ -17,14 +17,14 @@
   // - Pure client-side UI overlay: no network requests, no remote code, no downloads.
 
   // ---------------- settings ----------------
-  const DEFAULTS = { skip: 5, fineSkip: 1, autoHide: 2.5, mirror: false, enabled: true };
+  const DEFAULTS = { skip: 5, fineSkip: 1, autoHide: 2.5, mirror: false, dotMode: false, enabled: true };
   const LIMITS = { skip: [0.5, 60], fineSkip: [0.1, 30], autoHide: [0.5, 30] };
   let settings = { ...DEFAULTS };
   const ext = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id ? chrome : null;
 
   // Accept only known keys with the right type and range; anything else falls back to defaults.
   function cleanSetting(key, value) {
-    if (key === 'mirror') return value === true;
+    if (key === 'mirror' || key === 'dotMode') return value === true;
     if (key === 'enabled') return value !== false;
     if (!(key in LIMITS)) return undefined;
     const n = Number(value);
@@ -68,10 +68,10 @@
   function getState(v) {
     let s = states.get(v);
     if (!s) {
-      s = { a: null, b: null, loop: false, prevT: 0 };
+      s = { a: null, b: null, loop: false, prevT: 0, playT: null };
       states.set(v, s);
       // Instagram recycles <video> elements while scrolling: a new source = fresh loop state.
-      v.addEventListener('loadstart', () => clearLoop(v, true));
+      v.addEventListener('loadstart', () => { s.playT = null; clearLoop(v, true); });
       v.addEventListener('ended', () => {
         const st = states.get(v);
         if (st && st.loop) { seekTo(v, loopA(v, st)); v.play().catch(() => {}); }
@@ -98,80 +98,163 @@
   }
 
   // ---------------- seeking ----------------
-  // Instagram's player "gap-jumps": seeking while playing into a region that isn't buffered yet
-  // can make it skip forward to the next buffered range, undoing the seek. So for unbuffered
-  // targets we pause, seek, and resume once the data is there; and for a few seconds after any
-  // seek we re-apply the target if the player jumps away anyway.
-  const pendingSeeks = new Map(); // video -> { target, start, until, tries, retryAt, resume }
+  // Instagram's OzPlayer installs an own-property `currentTime` setter in the MAIN world that
+  // clears stale SourceBuffer ranges before seeking so its MSE gap-skipper won't snap back to an
+  // earlier buffered range. `setMediaTime` routes seeks through `src/page-seek.js` in the MAIN
+  // world, with a direct fallback if the helper hasn't run yet.
+  const pendingSeeks = new Map(); // video -> { target, start, until, tries, retryAt, loading, resume, lastSeekAt }
+  let scrubTime = null;
+  let dragWasPlaying = false;
+
+  function setMediaTime(v, t) {
+    const handled = !v.dispatchEvent(new CustomEvent('igvc:seek', { detail: t, cancelable: true }));
+    if (!handled) v.currentTime = t;
+  }
 
   function isBuffered(v, t) {
+    const d = dur(v);
     try {
       for (let i = 0; i < v.buffered.length; i++) {
-        if (v.buffered.start(i) - 0.05 <= t && t < v.buffered.end(i) - 0.15) return true;
+        const end = v.buffered.end(i);
+        const hi = d > 0 && end >= d - 0.25 ? Math.max(end, d) : end - 0.15;
+        if (v.buffered.start(i) - 0.08 <= t && t <= hi) return true;
       }
     } catch {}
     return false;
   }
 
-  function seekTo(v, t) {
-    t = clamp(t, 0, dur(v) || Infinity);
+  function seekTo(v, t, wantPlay) {
+    const d = dur(v);
+    t = clamp(t, 0, d > 0.25 ? d - 0.1 : d || Infinity);
     const now = performance.now();
     const prev = pendingSeeks.get(v);
-    const playing = !v.paused || !!(prev && prev.resume);
-    const p = { target: t, start: now, until: now + 2000, tries: 0, retryAt: 0, resume: false };
-    if (playing && !dragging && !isBuffered(v, t)) {
-      markPauseIntent();
-      v.pause();
-      p.resume = true;
-      p.until = now + 5000;
-    }
-    v.currentTime = t;
+    const playing = wantPlay !== undefined ? wantPlay : (!v.paused || !!(prev && prev.resume));
+    const st = states.get(v);
+    if (st) st.playT = t;
+    const unbuf = !isBuffered(v, t);
+    const p = {
+      target: t, start: now, until: now + (unbuf ? 30000 : 2500),
+      tries: 0, retryAt: 0, loading: unbuf, resume: playing,
+      lastSeekAt: now,
+    };
+    if (playing && v.paused) v.play().catch(() => {});
+    else if (!playing && !v.paused) { markPauseIntent(); v.pause(); }
+    setMediaTime(v, t);
     pendingSeeks.set(v, p);
   }
 
   function guardSeeks(now) {
     for (const [v, p] of pendingSeeks) {
       if (!v.isConnected || now > p.until) {
-        if (p.resume && v.isConnected) v.play().catch(() => {});
+        if (p.resume && v.isConnected && v.paused && isBuffered(v, v.currentTime)) v.play().catch(() => {});
         pendingSeeks.delete(v);
         continue;
       }
-      if (p.resume) {
-        // Paused on purpose while the target loads; resume once it is playable.
-        if (Math.abs(v.currentTime - p.target) > 0.5) v.currentTime = p.target;
-        else if (!v.seeking && v.readyState >= 3 && isBuffered(v, p.target)) {
-          p.resume = false;
+      if (p.loading) {
+        // Give OzPlayer's async clearSourceBufferRange (~10-60ms) time to set native currentTime.
+        const settled = now - p.lastSeekAt > 120;
+        const bufferedNow = isBuffered(v, p.target);
+        if (settled && bufferedNow && !v.seeking && (v.readyState >= 3 || (!p.resume && v.readyState >= 2))) {
+          if (Math.abs(v.currentTime - p.target) > 0.85) {
+            setMediaTime(v, p.target);
+            p.lastSeekAt = now;
+            continue;
+          }
+          p.loading = false;
+          p.target = v.currentTime;
           p.start = now;
+          p.lastSeekAt = now;
           p.until = now + 1500;
-          v.play().catch(() => {});
+          if (p.resume && v.paused) v.play().catch(() => {});
+          p.resume = false;
+          continue;
+        }
+        if (Math.abs(v.currentTime - p.target) > 0.85) {
+          // If an older in-flight segment appended and snapped currentTime away from target,
+          // re-issue through MAIN world so OzPlayer clears that range and fetches target.
+          const backoff = v.seeking ? 700 : 300;
+          if (now - p.lastSeekAt > backoff) {
+            if (++p.tries > 18) { pendingSeeks.delete(v); continue; }
+            setMediaTime(v, p.target);
+            p.lastSeekAt = now;
+          }
         }
         continue;
       }
       if (p.retryAt) {
-        // Give the player time to buffer the target segment before seeking back.
         if (now < p.retryAt) continue;
         p.retryAt = 0;
-        v.currentTime = p.target;
+        if (!isBuffered(v, p.target)) {
+          p.loading = true;
+          p.until = Math.max(p.until, now + 30000);
+        }
+        setMediaTime(v, p.target);
+        p.lastSeekAt = now;
         p.start = now;
-        p.until = now + 2000;
+        p.until = Math.max(p.until, now + 2000);
+        continue;
+      }
+      if (now - p.lastSeekAt < 140 || v.seeking || v.readyState < 3) {
+        p.start = now - ((v.currentTime - p.target) * 1000) / (v.playbackRate || 1);
         continue;
       }
       const expected = p.target + ((now - p.start) / 1000) * (v.paused ? 0 : v.playbackRate);
+      const d = dur(v);
+      if (v.ended || (d > 2 && expected >= d - 0.3 && v.currentTime < 1.0)) {
+        pendingSeeks.delete(v);
+        continue;
+      }
       const drift = v.currentTime - expected;
-      if (drift > 0.75 || drift < -1.5) {
+      if (drift > 0.85 || drift < -1.5) {
         if (++p.tries > 12) { pendingSeeks.delete(v); continue; }
         p.retryAt = now + 350;
-        p.until = now + 3000;
+        p.until = Math.max(p.until, now + 3000);
+        continue;
+      }
+      if (!v.seeking && (v.readyState >= 3 || (v.paused && v.readyState >= 2)) && now - p.lastSeekAt > 350 && Math.abs(drift) < 0.35) {
+        pendingSeeks.delete(v);
       }
     }
   }
 
-  // Where the playhead should be, accounting for a seek that is still settling.
+  // Catch mid-playback MSE gap-jumps (wrapping to 0:00 at unbuffered gaps) and leading PTS start
+  // gaps (e.g. buffered=[0.04..24] while currentTime sits stuck at 0.00 with readyState <= 2).
+  function guardPlaybackGaps(now) {
+    const v = active;
+    if (!v || !v.isConnected || dragging || pendingSeeks.has(v)) return;
+    const s = getState(v);
+    if (!v.paused && !v.seeking && v.readyState <= 2 && v.currentTime < 0.5) {
+      try {
+        if (v.buffered.length > 0) {
+          const bs = v.buffered.start(0), be = v.buffered.end(0);
+          if (bs > v.currentTime + 0.005 && bs < 1.0 && be > bs + 0.2) {
+            if (!s.stallAt) s.stallAt = now;
+            else if (now - s.stallAt > 350) { s.stallAt = 0; setMediaTime(v, bs + 0.02); return; }
+          } else s.stallAt = 0;
+        }
+      } catch {}
+    } else s.stallAt = 0;
+    if (v.paused || v.seeking) return;
+    const d = dur(v), ct = v.currentTime;
+    const prev = s.playT;
+    s.playT = ct;
+    if (prev == null || d < 5 || prev < 2 || prev >= d - 1.2) return;
+    if (s.loop && Math.abs(ct - loopA(v, s)) < 0.8) return;
+    const jumpedToZero = ct < 0.5 && prev > 3;
+    const jumpedForward = ct - prev > 2.5;
+    if ((jumpedToZero || jumpedForward) && !isBuffered(v, prev + 0.25)) {
+      seekTo(v, prev + 0.05, true);
+    }
+  }
+
+  // Where the playhead should be, accounting for an active drag or a seek that is still settling.
   function intendedTime(v) {
+    if (dragging === 'seek' && v === active && scrubTime != null) return scrubTime;
     const p = pendingSeeks.get(v);
     if (!p) return v.currentTime;
-    if (p.retryAt) return p.target;
-    return p.target + ((performance.now() - p.start) / 1000) * (v.paused ? 0 : v.playbackRate);
+    const now = performance.now();
+    if (p.loading || p.retryAt || v.seeking || now - p.lastSeekAt < 160) return p.target;
+    return p.target + ((now - p.start) / 1000) * (v.paused ? 0 : v.playbackRate);
   }
 
   // ---------------- actions ----------------
@@ -183,12 +266,33 @@
   function frameStep(v, dir) {
     markPauseIntent();
     v.pause();
-    seekTo(v, v.currentTime + dir * FRAME);
+    seekTo(v, intendedTime(v) + dir * FRAME, false);
   }
   function togglePlay(v) {
     const p = pendingSeeks.get(v);
-    if (p && p.resume) { p.resume = false; return; } // stay paused instead of auto-resuming
-    if (v.paused) v.play().catch(() => {}); else { markPauseIntent(); v.pause(); }
+    if (p && p.loading) {
+      if (p.resume) { p.resume = false; markPauseIntent(); v.pause(); }
+      else { p.resume = true; v.play().catch(() => {}); }
+      return;
+    }
+    if (v.paused) {
+      const d = dur(v);
+      // Posts whose video track ends slightly before audio duration (e.g. 41.57s vs 41.68s)
+      // pause at the end with v.ended === false; rewind to 0 so Play actually restarts them.
+      if (v.ended || (d > 1 && v.currentTime >= d - 0.25)) {
+        seekTo(v, 0, true);
+        return;
+      }
+      try {
+        if (v.buffered.length > 0 && v.currentTime < v.buffered.start(0) && v.buffered.start(0) < 1.0) {
+          setMediaTime(v, v.buffered.start(0) + 0.02);
+        }
+      } catch {}
+      v.play().catch(() => {});
+    } else {
+      markPauseIntent();
+      v.pause();
+    }
   }
   function enableLoop(v, on) {
     const s = getState(v);
@@ -203,14 +307,14 @@
   }
   function setA(v) {
     const s = getState(v);
-    s.a = v.currentTime;
+    s.a = intendedTime(v);
     if (s.b != null && s.b <= s.a + 0.05) s.b = null;
     enableLoop(v, true);
     toast(`Loop start ${fmt(s.a)}`);
   }
   function setB(v) {
     const s = getState(v);
-    const t = v.currentTime;
+    const t = intendedTime(v);
     if (s.a != null && t <= s.a + 0.05) { s.b = s.a; s.a = t; } else s.b = t;
     enableLoop(v, true);
     seekTo(v, loopA(v, s));
@@ -241,9 +345,16 @@
     else next = [...SPEEDS].reverse().find((x) => x < cur - 0.001) ?? SPEEDS[SPEEDS.length - 1];
     setSpeed(v, next);
   }
+  let expandedVideo = null;
   function toggleMirror() {
     saveSetting('mirror', !settings.mirror);
     toast(settings.mirror ? 'Mirrored' : 'Mirror off');
+  }
+  function toggleDotMode() {
+    const next = !settings.dotMode;
+    expandedVideo = null;
+    saveSetting('dotMode', next);
+    toast(next ? 'Dot mode on — click side dot to expand' : 'Dot mode off');
   }
 
   // ---------------- site ----------------
@@ -291,6 +402,7 @@
     loop: '<svg viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>',
     close: '<svg viewBox="0 0 24 24"><path d="M18.3 5.7a1 1 0 0 0-1.4 0L12 10.6 7.1 5.7a1 1 0 0 0-1.4 1.4l4.9 4.9-4.9 4.9a1 1 0 1 0 1.4 1.4l4.9-4.9 4.9 4.9a1 1 0 0 0 1.4-1.4L13.4 12l4.9-4.9a1 1 0 0 0 0-1.4z"/></svg>',
     mirror: '<svg viewBox="0 0 24 24"><path d="M11 2h2v20h-2zM9 6v12L3 18zM15 6l6 12h-6z" fill-rule="evenodd"/></svg>',
+    dot: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><path d="M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9zm0 16a7 7 0 1 1 7-7 7 7 0 0 1-7 7z" opacity=".55"/></svg>',
   };
 
   const CSS = `
@@ -299,10 +411,20 @@
     .wrap { position: fixed; pointer-events: none; opacity: 0; transition: opacity .18s ease-out;
       font: 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #fff; }
     .wrap.show { opacity: 1; }
-    .wrap.show .bar { pointer-events: auto; }
+    .wrap.show:not(.collapsed) .bar { pointer-events: auto; }
+    .wrap.collapsed .bar { opacity: 0; pointer-events: none !important; transform: translateY(6px); }
     .bar { position: absolute; left: 48px; right: 48px; bottom: 8px; padding: 10px 10px 8px; border-radius: 12px;
       background: rgba(12, 12, 16, .9); backdrop-filter: blur(8px); border: 1px solid rgba(255, 255, 255, .12);
-      box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
+      box-shadow: 0 6px 20px rgba(0, 0, 0, .45); transition: bottom .15s ease-out, opacity .15s ease-out, transform .15s ease-out; }
+    .dot { position: absolute; left: 10px; top: 36%; width: 28px; height: 28px; min-width: 28px; padding: 0; border-radius: 50%;
+      display: none; align-items: center; justify-content: center; pointer-events: none; opacity: 0;
+      background: rgba(12, 12, 16, .84); backdrop-filter: blur(6px); border: 1.5px solid rgba(255, 255, 255, .26);
+      box-shadow: 0 3px 12px rgba(0, 0, 0, .45); transition: opacity .15s ease-out, transform .12s ease-out, border-color .12s; }
+    .wrap.dot-mode .dot { display: inline-flex; }
+    .wrap.show.dot-mode .dot { opacity: 1; pointer-events: auto; }
+    .dot:hover { background: rgba(18, 18, 24, .95); border-color: #ffc400; transform: scale(1.08); }
+    .dot-core { width: 9px; height: 9px; border-radius: 50%; background: #ffc400; transition: transform .15s ease-out, background-color .15s; }
+    .dot.open .dot-core { background: #fff; transform: scale(.75); }
     .tl { position: relative; height: 20px; cursor: pointer; touch-action: none; }
     .track { position: absolute; left: 0; right: 0; top: 8px; height: 4px; border-radius: 3px;
       background: rgba(255,255,255,.22); transition: top .1s, height .1s; }
@@ -351,13 +473,15 @@
       transform: translate(-50%, -4px); padding: 7px 11px; border-radius: 8px; background: rgba(0,0,0,.82);
       font-weight: 600; white-space: nowrap; opacity: 0; transition: opacity .15s, transform .15s; pointer-events: none; }
     .toast.show { opacity: 1; transform: translate(-50%, 0); }
-    .wrap.compact .bar { left: 44px; right: 44px; padding: 8px 8px 6px; }
+    .wrap.compact .bar { left: 44px; right: 44px; padding: 8px 7px 6px; }
     .wrap.compact .opt { display: none; }
     .wrap.compact .time .d { display: none; }
-    .wrap.compact button { min-width: 24px; padding: 0 3px; }
+    .wrap.compact button:not(.dot) { height: 26px; min-width: 22px; padding: 0 2px; }
+    .wrap.compact button:not(.dot) svg { width: 16px; height: 16px; }
     .wrap.compact .row { gap: 1px; flex-wrap: nowrap; }
-    .wrap.compact .time { padding: 0 3px; }
-    .wrap.compact .spd { min-width: 32px; }
+    .wrap.compact .time { padding: 0 3px; font-size: 11px; }
+    .wrap.compact .spd { min-width: 30px; font-size: 11px; }
+    .wrap.tiny .sk, .wrap.tiny .time { display: none; }
     @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
   `;
 
@@ -368,6 +492,7 @@
   root.innerHTML = `<style>${CSS}</style>
     <div class="wrap">
       <div class="toast"></div>
+      <button class="dot" data-act="expandDot" title="Open ReelCoach controls" aria-label="Open ReelCoach controls"><span class="dot-core"></span></button>
       <div class="bar">
         <div class="tl">
           <div class="track">
@@ -393,17 +518,19 @@
           <span class="sep opt"></span>
           <button class="spd" data-act="speed" title="Speed — click: faster, right-click: slower (S / D)">1×</button>
           <button data-act="mirror" title="Mirror video (M)">${ICON.mirror}</button>
+          <button data-act="dot" title="Dot mode — collapse into a side dot until clicked">${ICON.dot}</button>
         </div>
       </div>
     </div>`;
 
   const $ = (sel) => root.querySelector(sel);
   const ui = {
-    wrap: $('.wrap'), bar: $('.bar'), toast: $('.toast'),
+    wrap: $('.wrap'), bar: $('.bar'), dot: $('.dot'), toast: $('.toast'),
     tl: $('.tl'), track: $('.track'), buf: $('.buf'), played: $('.played'), region: $('.region'), head: $('.head'),
     mkA: root.querySelector('.mk[data-l="A"]'), mkB: root.querySelector('.mk[data-l="B"]'), tip: $('.tip'),
     play: $('[data-act="play"]'), time: $('.time'), loop: $('[data-act="loop"]'), clr: $('.clr'),
     setA: $('[data-act="setA"]'), setB: $('[data-act="setB"]'), speed: $('.spd'), mirror: $('[data-act="mirror"]'),
+    dotToggle: $('[data-act="dot"]'),
     skipLabels: root.querySelectorAll('.sk'),
   };
   // Time readout is two text nodes (no HTML parsing of dynamic values anywhere).
@@ -427,6 +554,11 @@
     root.querySelector('[data-act="fwd"]').title = `Forward ${settings.skip}s (→, Shift+→ = ${settings.fineSkip}s)`;
     document.documentElement.classList.toggle('igvc-mirror', !!settings.mirror && siteActive());
     ui.mirror.classList.toggle('on', !!settings.mirror);
+    ui.dotToggle.classList.toggle('on', !!settings.dotMode);
+    ui.dotToggle.title = settings.dotMode
+      ? 'Dot mode is on — click to always show full controls on hover'
+      : 'Dot mode — collapse into a side dot until clicked';
+    if (!settings.dotMode) expandedVideo = null;
   }
 
   // Keep Instagram from reacting to clicks/keys aimed at our controls.
@@ -520,7 +652,7 @@
     if (!e.isTrusted) return;
     pointer.x = e.clientX; pointer.y = e.clientY;
     lastMove = performance.now();
-    overPanel = e.composedPath().some((n) => n === ui.bar);
+    overPanel = e.composedPath().some((n) => n === ui.bar || n === ui.dot);
     needPick = true;
   }, { capture: true, passive: true });
   document.documentElement.addEventListener('mouseleave', (e) => {
@@ -536,6 +668,11 @@
     if (e.detail > 0) btn.blur(); // mouse click: don't leave a focus ring or keep focus in the overlay
     const v = active;
     switch (btn.dataset.act) {
+      case 'expandDot':
+        expandedVideo = expandedVideo === v ? null : v;
+        if (expandedVideo) poke(2500);
+        render(performance.now());
+        break;
       case 'back': seekBy(v, -(e.shiftKey ? settings.fineSkip : settings.skip)); break;
       case 'fwd': seekBy(v, e.shiftKey ? settings.fineSkip : settings.skip); break;
       case 'prevF': frameStep(v, -1); break;
@@ -547,6 +684,7 @@
       case 'clear': clearLoop(v); break;
       case 'speed': cycleSpeed(v, e.shiftKey ? -1 : 1); break;
       case 'mirror': toggleMirror(); break;
+      case 'dot': toggleDotMode(); render(performance.now()); break;
     }
   });
   ui.speed.addEventListener('contextmenu', (e) => {
@@ -564,7 +702,16 @@
     if (!v) return;
     const d = dur(v);
     const t = ratioAt(clientX) * d;
-    if (dragging === 'seek') { seekTo(v, t); return; }
+    if (dragging === 'seek') {
+      scrubTime = clamp(t, 0, d > 0.25 ? d - 0.1 : d || Infinity);
+      if (isBuffered(v, scrubTime)) {
+        setMediaTime(v, scrubTime);
+      } else if (!v.paused) {
+        markPauseIntent();
+        v.pause();
+      }
+      return;
+    }
     const s = getState(v);
     if (dragging === 'A') s.a = clamp(t, 0, loopB(v, s) - 0.1);
     else s.b = clamp(t, loopA(v, s) + 0.1, d);
@@ -574,6 +721,11 @@
     e.preventDefault();
     const mk = e.target.closest('.mk');
     dragging = mk ? mk.dataset.l : 'seek';
+    if (dragging === 'seek') {
+      const prev = pendingSeeks.get(active);
+      dragWasPlaying = !active.paused || !!(prev && prev.resume);
+      pendingSeeks.delete(active);
+    }
     ui.tl.setPointerCapture(e.pointerId);
     ui.tl.classList.add('drag');
     dragTo(e.clientX);
@@ -587,12 +739,16 @@
   });
   const endDrag = () => {
     if (!dragging) return;
-    if (dragging !== 'seek' && active) {
+    const mode = dragging;
+    dragging = null;
+    ui.tl.classList.remove('drag');
+    if (mode === 'seek') {
+      if (active && scrubTime != null) seekTo(active, scrubTime, dragWasPlaying);
+      scrubTime = null;
+    } else if (active) {
       const s = getState(active);
       toast(`Loop ${fmt(loopA(active, s))} → ${fmt(loopB(active, s))}`);
     }
-    dragging = null;
-    ui.tl.classList.remove('drag');
   };
   ui.tl.addEventListener('pointerup', endDrag);
   ui.tl.addEventListener('pointercancel', endDrag);
@@ -643,7 +799,10 @@
     for (const v of looping) {
       const s = states.get(v);
       if (!v.isConnected || !s || !s.loop) { looping.delete(v); continue; }
-      if (dragging && v === active) { s.prevT = v.currentTime; continue; }
+      if ((dragging && v === active) || (pendingSeeks.has(v) && (pendingSeeks.get(v).loading || v.seeking))) {
+        s.prevT = v.currentTime;
+        continue;
+      }
       const A = loopA(v, s), B = loopB(v, s), d = dur(v);
       let t = v.currentTime;
       if (B - A > 0.05) {
@@ -652,18 +811,149 @@
         if (t >= B - 0.02 || (nearEnd && s.prevT >= B - 0.5 && t < A - 0.05)) {
           seekTo(v, A);
           t = A;
-          if (v.paused && nearEnd) v.play().catch(() => {});
+          if (v.paused && nearEnd && !pendingSeeks.get(v)?.loading) v.play().catch(() => {});
         }
       }
       s.prevT = t;
     }
   }
 
+  function hasDirectText(el) {
+    for (let n = el.firstChild; n; n = n.nextSibling) {
+      if (n.nodeType === 3 && n.nodeValue.trim().length > 0) return true;
+    }
+    return false;
+  }
+
+  function isVisiblyShown(el, stopAt) {
+    for (let cur = el; cur && cur !== stopAt; cur = cur.parentElement) {
+      const cs = getComputedStyle(cur);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) <= 0.08) return false;
+    }
+    return true;
+  }
+
+  // Keep the bottom-pinned pill at 8px when the center bottom of the video is clear, and lift it
+  // cleanly above bottom comments, captions, or Story reply bars that occupy the pill's zone.
+  const INTERACTIVE_SEL = 'input, textarea, select, [contenteditable="true"], [role="textbox"], [placeholder], button, a[href], [role="button"], [role="link"]';
+  const TEXT_CANDIDATE_SEL = `${INTERACTIVE_SEL}, span, p, label, h1, h2, h3, h4`;
+  let dodge = 8;
+  let dodgeFor = null;
+  let dodgePath = '';
+  let dodgeMeasuredAt = 0;
+
+  function bottomClearance(v, left, right, bottom, h, compact) {
+    const isStory = /^\/stories(\/|$)/.test(location.pathname);
+    const minBottom = isStory ? 68 : 8;
+    const padX = compact ? 44 : 48;
+    const barL = left + padX + 4, barR = right - padX - 4;
+    const w = right - left;
+    if (barR - barL < 40 || h < 180) return minBottom;
+
+    const maxLift = Math.max(minBottom, Math.round(Math.min(185, h * 0.38)));
+    const scanTop = bottom - maxLift - 16;
+    const vArea = w * h;
+    const candidates = new Set();
+
+    for (let row = 10; row <= Math.min(154, maxLift + 12); row += 18) {
+      const y = bottom - row;
+      if (y <= bottom - h + 8) break;
+      for (let i = 0; i <= 4; i++) {
+        const x = barL + ((barR - barL) * i) / 4;
+        for (const el of document.elementsFromPoint(x, y)) {
+          if (el === host) continue;
+          if (el === v || el.contains(v)) break;
+          const ctrl = el.closest && el.closest(INTERACTIVE_SEL);
+          if (ctrl && !ctrl.contains(v)) candidates.add(ctrl);
+          if (hasDirectText(el)) candidates.add(el);
+        }
+      }
+    }
+
+    let scope = null;
+    for (let p = v.parentElement; p && p !== document.body; p = p.parentElement) {
+      const sr = p.getBoundingClientRect();
+      if (sr.width > w + 90 || sr.height > h + 90) break;
+      scope = p;
+    }
+    if (scope) {
+      const nodes = scope.querySelectorAll(TEXT_CANDIDATE_SEL);
+      const limit = Math.min(nodes.length, 120);
+      for (let i = 0; i < limit; i++) {
+        const el = nodes[i];
+        if (hasDirectText(el) || el.matches(INTERACTIVE_SEL)) candidates.add(el);
+      }
+    }
+
+    const boxes = [];
+    for (const el of candidates) {
+      if (!el || el === host || host.contains(el) || el.contains(v)) continue;
+      const role = el.getAttribute('role');
+      if (role === 'slider' || role === 'progressbar') continue;
+      const er = el.getBoundingClientRect();
+      if (er.width < 10 || er.height < 10) continue;
+      if (er.height > Math.min(115, h * 0.25) || er.width * er.height > vArea * 0.24) continue;
+      if (er.right <= barL || er.left >= barR) continue;
+      if (er.bottom > bottom + 8 || er.bottom < scanTop || er.top < scanTop - 20) continue;
+      if (!isVisiblyShown(el, scope ? scope.parentElement : document.body)) continue;
+      boxes.push({ top: er.top, bottom: er.bottom });
+    }
+    if (!boxes.length) return minBottom;
+
+    boxes.sort((a, b) => b.bottom - a.bottom);
+    const barH = ui.bar.offsetHeight || 68;
+    let clearanceTop = bottom - minBottom;
+    let moved = true;
+    while (moved) {
+      moved = false;
+      for (const b of boxes) {
+        if (b.bottom > clearanceTop - barH + 2 && b.top < clearanceTop + 4) {
+          const nextTop = b.top - 8;
+          if (nextTop < clearanceTop && bottom - nextTop <= maxLift + 8) {
+            clearanceTop = nextTop;
+            moved = true;
+          }
+        }
+      }
+    }
+    return clamp(Math.round(bottom - clearanceTop), minBottom, maxLift);
+  }
+
+  let dotTop = 0;
+  let dotFor = null;
+  let dotMeasuredAt = 0;
+
+  function dotOffsetTop(v, left, top, w, h) {
+    const vArea = w * h;
+    const minY = Math.min(68, h * 0.25);
+    const maxY = Math.max(minY + 10, h - 110);
+    for (const ratio of [0.36, 0.28, 0.62, 0.22, 0.48]) {
+      const cy = clamp(Math.round(h * ratio), minY, maxY);
+      const px = left + 24, py = top + cy;
+      let clear = true;
+      for (const el of document.elementsFromPoint(px, py)) {
+        if (el === host) continue;
+        if (el === v || el.contains(v)) break;
+        const ctrl = el.closest && el.closest(INTERACTIVE_SEL);
+        const hit = (ctrl && !ctrl.contains(v)) ? ctrl : (hasDirectText(el) ? el : null);
+        if (hit) {
+          const er = hit.getBoundingClientRect();
+          if (er.width >= 8 && er.height >= 8 && er.width * er.height <= vArea * 0.24) {
+            clear = false;
+            break;
+          }
+        }
+      }
+      if (clear) return cy - 14;
+    }
+    return clamp(Math.round(h * 0.36) - 14, 12, Math.max(12, h - 44));
+  }
+
   let lastPlayIcon = '';
   function render(now) {
     const on = siteActive();
     document.documentElement.classList.toggle('igvc-mirror', on && !!settings.mirror);
-    if (!on) { ui.wrap.classList.remove('show'); return; }
+    if (!on) { ui.wrap.classList.remove('show'); expandedVideo = null; return; }
     if (needPick && !dragging) {
       needPick = false;
       if (!overPanel) {
@@ -683,6 +973,12 @@
       const py = pointerOnVideo ? pointer.y : (Math.max(r.top, 0) + Math.min(r.bottom, innerHeight)) / 2;
       if (isCovered(v, px, py)) show = false;
     }
+    if (!settings.dotMode || (expandedVideo && expandedVideo !== v) || (!show && !overPanel)) {
+      expandedVideo = null;
+    }
+    const collapsed = !!settings.dotMode && expandedVideo !== v;
+    ui.wrap.classList.toggle('dot-mode', !!settings.dotMode);
+    ui.wrap.classList.toggle('collapsed', collapsed);
     ui.wrap.classList.toggle('show', show);
     if (!r) return;
 
@@ -692,8 +988,40 @@
     const w = Math.max(0, right - left), h = Math.max(0, bottom - top);
     const st = ui.wrap.style;
     st.left = `${left}px`; st.top = `${top}px`; st.width = `${w}px`; st.height = `${h}px`;
-    ui.wrap.classList.toggle('compact', w < 520);
-    if (!show) return;
+    const compact = w < 520;
+    ui.wrap.classList.toggle('compact', compact);
+    ui.wrap.classList.toggle('tiny', w < 380);
+
+    if (settings.dotMode && show) {
+      ui.dot.classList.toggle('open', !collapsed);
+      const dotTitle = collapsed ? 'Open ReelCoach controls' : 'Collapse controls to dot';
+      if (ui.dot.title !== dotTitle) {
+        ui.dot.title = dotTitle;
+        ui.dot.setAttribute('aria-label', dotTitle);
+      }
+      if (v !== dotFor || !dotMeasuredAt || now - dotMeasuredAt > 300) {
+        dotFor = v;
+        dotMeasuredAt = now;
+        dotTop = dotOffsetTop(v, left, top, w, h);
+      }
+      ui.dot.style.top = `${dotTop}px`;
+    }
+
+    if (v !== dodgeFor || location.pathname !== dodgePath || (!show && !overPanel)) {
+      dodge = /^\/stories(\/|$)/.test(location.pathname) ? 68 : 8;
+      dodgeFor = v;
+      dodgePath = location.pathname;
+      dodgeMeasuredAt = 0;
+    }
+    if (!show || collapsed) {
+      ui.bar.style.bottom = `${dodge}px`;
+      return;
+    }
+    if (!dragging && (!dodgeMeasuredAt || now - dodgeMeasuredAt > 250)) {
+      dodgeMeasuredAt = now;
+      dodge = Math.max(dodge, bottomClearance(v, left, right, bottom, h, compact));
+    }
+    ui.bar.style.bottom = `${dodge}px`;
 
     const d = dur(v), t = intendedTime(v);
     const pct = (x) => `${d ? clamp(x / d, 0, 1) * 100 : 0}%`;
@@ -709,7 +1037,7 @@
     ui.timeCur.textContent = fmt(t);
     ui.timeDur.textContent = ` / ${fmt(d, false)}`;
 
-    const resuming = pendingSeeks.has(v) && pendingSeeks.get(v).resume;
+    const resuming = (dragging === 'seek' && dragWasPlaying) || (pendingSeeks.has(v) && pendingSeeks.get(v).resume);
     const playIcon = v.paused && !resuming ? 'play' : 'pause';
     if (playIcon !== lastPlayIcon) { ui.play.innerHTML = ICON[playIcon]; lastPlayIcon = playIcon; }
     ui.speed.textContent = `${+v.playbackRate.toFixed(2)}×`;
@@ -743,6 +1071,7 @@
       if ((++frameCount & 63) === 0) mount();
       if (siteActive()) {
         guardSeeks(now);
+        guardPlaybackGaps(now);
         enforceLoops();
       } else if (looping.size) {
         for (const v of [...looping]) clearLoop(v, true); // switched off: leave videos alone

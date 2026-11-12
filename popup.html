@@ -34,21 +34,26 @@
     display: inline-block; min-width: 18px; padding: 1px 5px; border-radius: 4px; text-align: center;
     background: var(--floor); border-bottom: 2px solid var(--line); font: 600 11px/1.4 "Segoe UI", system-ui, sans-serif;
   }
-  .power { margin: 10px 0 4px; padding: 10px 12px; border-radius: 8px; background: var(--floor); cursor: pointer; }
-  .power .sub { color: var(--muted); font-size: 11.5px; }
-  .power input {
+  .power, .toggle-row { cursor: pointer; }
+  .power { margin: 10px 0 4px; padding: 10px 12px; border-radius: 8px; background: var(--floor); }
+  .power .sub, .toggle-row .sub { color: var(--muted); font-size: 11.5px; }
+  .toggle-row { margin: 8px 0 10px; padding: 8px 10px; border-radius: 7px; background: rgba(255,255,255,.04); border: 1px solid var(--line); }
+  .power input, .toggle-row input {
     appearance: none; -webkit-appearance: none; flex: none; width: 42px; height: 24px; margin: 0; padding: 0;
     border: 0; border-radius: 12px; background: var(--line); position: relative; cursor: pointer; transition: background-color .15s;
   }
-  .power input::after {
+  .toggle-row input { width: 38px; height: 22px; border-radius: 11px; }
+  .power input::after, .toggle-row input::after {
     content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
     background: var(--chalk); transition: transform .15s ease-out;
   }
-  .power input:checked { background: var(--tape); }
+  .toggle-row input::after { width: 16px; height: 16px; }
+  .power input:checked, .toggle-row input:checked { background: var(--tape); }
   .power input:checked::after { transform: translateX(18px); background: #1d1c21; }
-  .power input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+  .toggle-row input:checked::after { transform: translateX(16px); background: #1d1c21; }
+  .power input:focus-visible, .toggle-row input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
   body.off .lead, body.off h2, body.off label:not(.power), body.off table { opacity: .45; }
-  @media (prefers-reduced-motion: reduce) { .power input, .power input::after { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .power input, .power input::after, .toggle-row input, .toggle-row input::after { transition: none; } }
   footer { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11.5px; }
   footer p { margin: 0 0 4px; }
 </style>
@@ -65,6 +70,10 @@
   <p class="lead">Hover any video on Instagram, Facebook or TikTok to get the controls.</p>
 
   <h2>Settings</h2>
+  <label class="toggle-row" for="dotMode">
+    <span><strong>Dot mode</strong><br><span class="sub">Show a side dot first; click it to expand</span></span>
+    <input id="dotMode" type="checkbox" role="switch">
+  </label>
   <label for="skip">Skip back / forward (seconds) <input id="skip" type="number" min="0.5" max="60" step="0.5"></label>
   <label for="fineSkip">Shift + skip (seconds) <input id="fineSkip" type="number" min="0.1" max="30" step="0.1"></label>
   <label for="autoHide">Hide controls after (seconds) <input id="autoHide" type="number" min="0.5" max="30" step="0.5"></label>
